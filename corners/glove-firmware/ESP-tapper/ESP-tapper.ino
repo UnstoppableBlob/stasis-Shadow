@@ -17,7 +17,7 @@ static int lastState = -1;
 void setup() {
   Serial.begin(115200);
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP); // matches your C3 code
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   WiFi.begin(AP_SSID, AP_PASSWORD);
   Serial.print("Connecting to ESP32-Hub");
@@ -30,7 +30,7 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   udp.begin(4212);
-  Serial.println("Ready! Waiting for pin changes on GPIO 21...");
+  Serial.println("Ready! Waiting for pin changes on GPIO 21 (Binary Mode)...");
 }
 
 void loop() {
@@ -45,25 +45,21 @@ void loop() {
     Serial.println("Reconnected!");
   }
 
-  bool isPinching = (digitalRead(BUTTON_PIN) == LOW); // LOW = active, same as your C3
-  int pinState = isPinching ? 1 : 0;
+  bool isPinching = (digitalRead(BUTTON_PIN) == LOW); 
+  
+  // Create a single byte (unsigned 8-bit integer)
+  uint8_t pinState = isPinching ? 1 : 0;
 
   if (pinState != lastState) {
     lastState = pinState;
 
-    char payload[64];
-    snprintf(payload, sizeof(payload),
-      "{\"sensor\":\"ESP3\",\"gpio\":%d}", pinState); // 1 = pinching, 0 = released
-
+    // Send exactly 1 byte over UDP
     udp.beginPacket(WROOM_IP, UDP_PORT);
-    udp.print(payload);
+    udp.write(&pinState, sizeof(pinState));
     udp.endPacket();
 
-    Serial.print("Sent: ");
-    Serial.println(payload);
-
-    if (isPinching) Serial.println("--- PINCHED ---");
-    else            Serial.println("--- RELEASED ---");
+    if (isPinching) Serial.println("--- PINCHED (Sent 1) ---");
+    else            Serial.println("--- RELEASED (Sent 0) ---");
   }
 
   delay(50);

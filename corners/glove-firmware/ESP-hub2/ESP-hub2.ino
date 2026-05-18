@@ -11,10 +11,15 @@ const int   UDP_PORT    = 4210;
 const int PIN_SHOULDER = 14;
 const int PIN_ELBOW    = 25;
 const int PIN_WRIST    = 26;
-const int SERVO_PIN    = 13;
+const int SERVO_PIN    = 13; // Base/Yaw
+const int PIN_CLAW     = 27; // Added Claw Pin
+
+// --- Claw Calibration ---
+const int CLAW_OPEN_ANGLE  = 100; // Adjust if it opens too wide
+const int CLAW_CLOSE_ANGLE = 0; // Adjust if it closes too hard
 
 Servo servo1;
-Servo servoShoulder, servoElbow, servoWrist;
+Servo servoShoulder, servoElbow, servoWrist, servoClaw;
 
 // --- ARM DIMENSIONS ---
 float arm1        = 110.0;
@@ -23,7 +28,7 @@ float totalLength = arm1 + arm2;
 
 // --- CALIBRATION: tune these ---
 bool  reverseElbow    = false;
-bool  reverseShoulder = true;
+bool  reverseShoulder = false;
 bool  reverseWrist    = false;
 
 float offsetElbow    = 75.0;
@@ -38,7 +43,8 @@ struct SensorData {
   float roll;
 };
 
-  float clamp(float v) { return constrain (v, -1.0, 1.0); }
+float clamp(float v) { return constrain (v, -1.0, 1.0); }
+
 // --- TRIANGLE MATH ---
 void getAngles(float pitch, int &angleElbow, int &angleShoulder, int &angleWrist) {
   pitch = constrain(pitch, 5.0, 85.0);
@@ -46,11 +52,19 @@ void getAngles(float pitch, int &angleElbow, int &angleShoulder, int &angleWrist
   float dist = ((pitch - 5.0) / (85.0 - 5.0)) * totalLength;
   dist = constrain(dist, 1.0, totalLength - 1.0);
 
+  float inputElbow    = (arm1*arm1 + arm2*arm2 - dist*dist) / (2.0 * arm1 * arm2);
+  float inputShoulder = (arm1*arm1 + dist*dist - arm2*arm2) / (2.0 * arm1 * dist);
 
+  Serial.print("acos inputs — Elbow: "); Serial.print(inputElbow);
+  Serial.print("  Shoulder: ");          Serial.println(inputShoulder);
 
-  float rawElbow    = acos(clamp((arm1*arm1 + arm2*arm2 - dist*dist)/ (2.0 * arm1 * arm2))) * 180.0 / M_PI;
-  float rawShoulder = acos(clamp((arm1*arm1 + dist*dist - arm2*arm2)/ (2.0 * arm1 * dist))) * 180.0 / M_PI;
+  float rawElbow    = acos(clamp(inputElbow))    * 180.0 / M_PI;
+  float rawShoulder = acos(clamp(inputShoulder)) * 180.0 / M_PI;
   float rawWrist    = 180.0 - rawShoulder - rawElbow;
+
+  Serial.print("RAW — Elbow: ");    Serial.print(rawElbow);
+  Serial.print("  Shoulder: ");     Serial.print(rawShoulder);
+  Serial.print("  Wrist: ");        Serial.println(rawWrist);
 
   angleElbow    = constrain((reverseElbow    ? 180.0 - rawElbow    : rawElbow)    + offsetElbow,    0, 180);
   angleShoulder = constrain((reverseShoulder ? 180.0 - rawShoulder : rawShoulder) + offsetShoulder, 0, 180);
@@ -62,20 +76,31 @@ void setup() {
   delay(2000);
   Serial.println("BOOTING...");
 
+  // Allocate hardware timers for ESP32 PWM channels
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
   servo1.setPeriodHertz(50);
   servo1.attach(SERVO_PIN, 600, 2300);
   servoShoulder.attach(PIN_SHOULDER);
   servoElbow.attach(PIN_ELBOW);
   servoWrist.attach(PIN_WRIST);
+  
+  // Setup the new Claw Servo
+  servoClaw.setPeriodHertz(50);
+  servoClaw.attach(PIN_CLAW, 500, 2400);
 
   // Initialize to pitch=5 (all the way in)
   int initElbow, initShoulder, initWrist;
-  getAngles(5.0, initElbow, initShoulder, initWrist);
+  getAngles(45, initElbow, initShoulder, initWrist);
 
   servo1.write(90);
   servoElbow.write(initElbow);
   servoShoulder.write(initShoulder);
   servoWrist.write(initWrist);
+  servoClaw.write(CLAW_OPEN_ANGLE); // Start with the claw open!
 
   Serial.print("Init — Elbow: ");    Serial.print(initElbow);
   Serial.print("  Shoulder: ");      Serial.print(initShoulder);
@@ -93,6 +118,7 @@ void setup() {
 void loop() {
   int packetSize = udp.parsePacket();
 
+  // --- Route 1 for the 8-byte MPU Data ---
   if (packetSize == sizeof(SensorData)) {
     SensorData receivedData;
     udp.read((char*)&receivedData, sizeof(receivedData));
@@ -101,7 +127,7 @@ void loop() {
     float valZ = receivedData.roll;
 
     valX = constrain(valX, -90.0, 90.0);
-    valZ = constrain(valZ,   5.0, 85.0);
+    valZ = constrain(valZ, 15.0, 65.0);
 
     // Yaw → servo1
     int servoAngleX = (int)(valX + 90.0);
@@ -118,11 +144,28 @@ void loop() {
     Serial.print("Yaw: ");       Serial.print(valX, 1);
     Serial.print(" Servo1: ");   Serial.print(servoAngleX);
     Serial.print(" | Pitch: ");  Serial.print(valZ, 1);
+    Serial.print(" Raw Pitch: "); Serial.print(receivedData.roll);
     Serial.print(" Elbow: ");    Serial.print(angleElbow);
     Serial.print(" Shoulder: "); Serial.print(angleShoulder);
     Serial.print(" Wrist: ");    Serial.println(angleWrist);
 
-  } else if (packetSize > 0) {
+  } 
+  // --- Route 2 for the 1-byte C3 Tapper Data ---
+  else if (packetSize == sizeof(uint8_t)) {
+    uint8_t tapperState;
+    udp.read((char*)&tapperState, sizeof(tapperState));
+    
+    if (tapperState == 1) {
+      Serial.println("TAPPER: Pinched! Closing claw.");
+      servoClaw.write(CLAW_CLOSE_ANGLE); // Snap shut
+    } else {
+      Serial.println("TAPPER: Released! Opening claw.");
+      servoClaw.write(CLAW_OPEN_ANGLE);  // Snap open
+    }
+    
+  } 
+  // Clear out junk packets
+  else if (packetSize > 0) {
     udp.flush();
   }
 }
