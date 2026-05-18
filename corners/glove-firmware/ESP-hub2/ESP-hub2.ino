@@ -11,6 +11,12 @@ const int   UDP_PORT    = 4210;
 const int SERVO_PIN = 18; // Connect MG996R signal wire here
 Servo myServo;
 
+float distance = 0;
+const int arm1 = 110;
+const float arm2 = 102.5;
+
+
+
 WiFiUDP udp;
 char buf[256];
 
@@ -50,18 +56,32 @@ void loop() {
         
         // 1. Constrain X to your limits (-90 to 90)
         valX = constrain(valX, -90.0, 90.0);
+
+        valZ = constrain(valZ, 5.0, 85.0);
         
         // 2. Map the -90 to 90 range to the 0 to 180 servo range
-        int servoAngle = (int)(valX + 90.0);
+        int servoAngleX = (int)(valX + 90.0);
+
+        //calculates distance (bottom peice of triangle)
+        distance = (valZ/85) * (arm1 + arm2);
+
+        // cos math to calcuate the imaginary triangle. 
+        int angleAtElbow = acos((arm1*arm1 + arm2*arm2 - distance*distance) / (2 * arm1 * arm2)) * 180.0 / M_PI;
+        int angleAtShoulder = acos((arm1*arm1 + distance*distance - arm2*arm2) / (2 * arm1 * distance)) * 180.0 / M_PI;
+        int angleAtWrist = 180.0 - angleAtShoulder - angleAtElbow;
+
+        int servoAngleTwo = 
+        int servoAngleThree = 
+        int servoAngleFour = 
         
         // 3. Move the servo
-        myServo.write(servoAngle);
+        myServo.write(servoAngleX);
 
         // Optional: Print to serial monitor to verify
         Serial.print("Raw X: ");
         Serial.print(valX, 1);
-        Serial.print(" \tMapped Angle: ");
-        Serial.println(servoAngle);
+        Serial.print(" \tMapped X Angle: ");
+        Serial.println(servoAngleX);
         
       } else {
         Serial.print("Raw data received: ");
