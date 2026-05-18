@@ -133,6 +133,9 @@ void loop() {
       if (relYaw >  180) relYaw -= 360;
       if (relYaw < -180) relYaw += 360;
 
+      relYaw = -relYaw;
+
+
       // 1. Create the struct and load it with your data
       SensorData myData;
       myData.yaw = relYaw;
@@ -143,10 +146,10 @@ void loop() {
       udp.write((uint8_t*)&myData, sizeof(myData));
       udp.endPacket();
 
-    Serial.print("Sent X: ");
-    Serial.print(myData.yaw);
-    Serial.print("\tZ: ");
-    Serial.println(myData.roll); // mirror to serial for debugging
+  Serial.print("Sent X: ");
+  Serial.print(myData.yaw);
+  Serial.print("\tZ: ");
+  Serial.println(myData.roll); // mirror to serial for debugging
 
       lastPrintTime = millis();
     }
