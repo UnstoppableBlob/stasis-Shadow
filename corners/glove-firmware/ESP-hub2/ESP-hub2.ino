@@ -7,86 +7,122 @@ const char* AP_SSID     = "ESP32-Hub";
 const char* AP_PASSWORD = "password123";
 const int   UDP_PORT    = 4210;
 
-// --- Servo config ---
-const int SERVO_PIN = 18; // Connect MG996R signal wire here
-Servo myServo;
+// --- Servo pins ---
+const int PIN_SHOULDER = 14;
+const int PIN_ELBOW    = 25;
+const int PIN_WRIST    = 26;
+const int SERVO_PIN    = 13;
+
+Servo servo1;
+Servo servoShoulder, servoElbow, servoWrist;
+
+// --- ARM DIMENSIONS ---
+float arm1        = 110.0;
+float arm2        = 102.5;
+float totalLength = arm1 + arm2;
+
+// --- CALIBRATION: tune these ---
+bool  reverseElbow    = false;
+bool  reverseShoulder = true;
+bool  reverseWrist    = false;
+
+float offsetElbow    = 75.0;
+float offsetShoulder = 130.0;
+float offsetWrist    = 0.0;
 
 float distance = 0;
-const int arm1 = 110;
-const float arm2 = 102.5;
-
-
-
 WiFiUDP udp;
-char buf[256];
+
+struct SensorData {
+  float yaw;
+  float roll;
+};
+
+  float clamp(float v) { return constrain (v, -1.0, 1.0); }
+// --- TRIANGLE MATH ---
+void getAngles(float pitch, int &angleElbow, int &angleShoulder, int &angleWrist) {
+  pitch = constrain(pitch, 5.0, 85.0);
+
+  float dist = ((pitch - 5.0) / (85.0 - 5.0)) * totalLength;
+  dist = constrain(dist, 1.0, totalLength - 1.0);
+
+
+
+  float rawElbow    = acos(clamp((arm1*arm1 + arm2*arm2 - dist*dist)/ (2.0 * arm1 * arm2))) * 180.0 / M_PI;
+  float rawShoulder = acos(clamp((arm1*arm1 + dist*dist - arm2*arm2)/ (2.0 * arm1 * dist))) * 180.0 / M_PI;
+  float rawWrist    = 180.0 - rawShoulder - rawElbow;
+
+  angleElbow    = constrain((reverseElbow    ? 180.0 - rawElbow    : rawElbow)    + offsetElbow,    0, 180);
+  angleShoulder = constrain((reverseShoulder ? 180.0 - rawShoulder : rawShoulder) + offsetShoulder, 0, 180);
+  angleWrist    = constrain((reverseWrist    ? 180.0 - rawWrist    : rawWrist)    + offsetWrist,    0, 180);
+}
 
 void setup() {
   Serial.begin(115200);
+  delay(2000);
+  Serial.println("BOOTING...");
 
-  // Attach the servo
-  myServo.setPeriodHertz(50); // Standard 50hz servo
-  myServo.attach(SERVO_PIN, 600, 2300); 
+  servo1.setPeriodHertz(50);
+  servo1.attach(SERVO_PIN, 600, 2300);
+  servoShoulder.attach(PIN_SHOULDER);
+  servoElbow.attach(PIN_ELBOW);
+  servoWrist.attach(PIN_WRIST);
 
-  // --- ADDED: Move to 90 degrees at startup ---
-  myServo.write(90);
-  delay(500); // Give the servo half a second to reach the position
-  // --------------------------------------------
+  // Initialize to pitch=5 (all the way in)
+  int initElbow, initShoulder, initWrist;
+  getAngles(5.0, initElbow, initShoulder, initWrist);
+
+  servo1.write(90);
+  servoElbow.write(initElbow);
+  servoShoulder.write(initShoulder);
+  servoWrist.write(initWrist);
+
+  Serial.print("Init — Elbow: ");    Serial.print(initElbow);
+  Serial.print("  Shoulder: ");      Serial.print(initShoulder);
+  Serial.print("  Wrist: ");         Serial.println(initWrist);
+
+  delay(500);
 
   WiFi.softAP(AP_SSID, AP_PASSWORD, 6, 0, 4);
-
-  Serial.print("Hotspot started. WROOM IP: ");
+  Serial.print("Hotspot started. IP: ");
   Serial.println(WiFi.softAPIP());
-
   udp.begin(UDP_PORT);
   Serial.println("Listening on UDP port 4210...");
 }
 
 void loop() {
   int packetSize = udp.parsePacket();
-  if (packetSize) {
-    int len = udp.read(buf, sizeof(buf) - 1);
-    if (len > 0) {
-      buf[len] = '\0'; // Null-terminate
-      
-      float valX = 0.0;
-      float valZ = 0.0;
-      
-      // Parse the incoming comma-separated string
-      if (sscanf(buf, "%f,%f", &valX, &valZ) == 2) {
-        
-        // 1. Constrain X to your limits (-90 to 90)
-        valX = constrain(valX, -90.0, 90.0);
 
-        valZ = constrain(valZ, 5.0, 85.0);
-        
-        // 2. Map the -90 to 90 range to the 0 to 180 servo range
-        int servoAngleX = (int)(valX + 90.0);
+  if (packetSize == sizeof(SensorData)) {
+    SensorData receivedData;
+    udp.read((char*)&receivedData, sizeof(receivedData));
 
-        //calculates distance (bottom peice of triangle)
-        distance = (valZ/85) * (arm1 + arm2);
+    float valX = receivedData.yaw;
+    float valZ = receivedData.roll;
 
-        // cos math to calcuate the imaginary triangle. 
-        int angleAtElbow = acos((arm1*arm1 + arm2*arm2 - distance*distance) / (2 * arm1 * arm2)) * 180.0 / M_PI;
-        int angleAtShoulder = acos((arm1*arm1 + distance*distance - arm2*arm2) / (2 * arm1 * distance)) * 180.0 / M_PI;
-        int angleAtWrist = 180.0 - angleAtShoulder - angleAtElbow;
+    valX = constrain(valX, -90.0, 90.0);
+    valZ = constrain(valZ,   5.0, 85.0);
 
-        int servoAngleTwo = 
-        int servoAngleThree = 
-        int servoAngleFour = 
-        
-        // 3. Move the servo
-        myServo.write(servoAngleX);
+    // Yaw → servo1
+    int servoAngleX = (int)(valX + 90.0);
+    servo1.write(servoAngleX);
 
-        // Optional: Print to serial monitor to verify
-        Serial.print("Raw X: ");
-        Serial.print(valX, 1);
-        Serial.print(" \tMapped X Angle: ");
-        Serial.println(servoAngleX);
-        
-      } else {
-        Serial.print("Raw data received: ");
-        Serial.println(buf);
-      }
-    }
+    // Pitch → triangle servos
+    int angleElbow, angleShoulder, angleWrist;
+    getAngles(valZ, angleElbow, angleShoulder, angleWrist);
+
+    servoElbow.write(angleElbow);
+    servoShoulder.write(angleShoulder);
+    servoWrist.write(angleWrist);
+
+    Serial.print("Yaw: ");       Serial.print(valX, 1);
+    Serial.print(" Servo1: ");   Serial.print(servoAngleX);
+    Serial.print(" | Pitch: ");  Serial.print(valZ, 1);
+    Serial.print(" Elbow: ");    Serial.print(angleElbow);
+    Serial.print(" Shoulder: "); Serial.print(angleShoulder);
+    Serial.print(" Wrist: ");    Serial.println(angleWrist);
+
+  } else if (packetSize > 0) {
+    udp.flush();
   }
 }

@@ -2,20 +2,19 @@
 #include "MPU6050_6Axis_MotionApps20.h"
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
 #include "Wire.h"
+#endif
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#endif
 
-// Wi-Fi Credentials for the WROOM Access Point
+// --- WiFi / UDP config ---
 const char* AP_SSID     = "ESP32-Hub";
 const char* AP_PASSWORD = "password123";
+const char* WROOM_IP    = "192.168.4.1";
+const int   UDP_PORT    = 4210;
 
-// WROOM Host details
-const char* WROOM_IP = "192.168.4.1";
-const int   UDP_PORT = 4210;
+WiFiUDP udp;
 
-WiFiUDP udp; // <-- Added UDP instance
-
+// --- MPU ---
 MPU6050 mpu;
 
 const int BUTTON_PIN = 21;
@@ -33,6 +32,12 @@ float yawOffset = 0, rollOffset = 0;
 bool wasPinching = false;
 unsigned long lastPrintTime = 0;
 
+// --- ADDED: The High-Speed Binary Data Structure ---
+struct SensorData {
+  float yaw;
+  float roll;
+};
+
 void setup() {
   Wire.begin(8, 9);
   Wire.setClock(400000);
@@ -40,29 +45,27 @@ void setup() {
   Serial.begin(115200);
   while (!Serial);
 
-  // --- ADDED: Wi-Fi Setup ---
-  Serial.print("Connecting to AP: ");
-  Serial.println(AP_SSID);
-  WiFi.mode(WIFI_STA);
+  // --- WiFi ---
   WiFi.begin(AP_SSID, AP_PASSWORD);
-
+  Serial.print("Connecting to ESP32-Hub");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi connected!");
-  Serial.print("Super Mini IP address: ");
+  Serial.println();
+  Serial.print("Connected! IP: ");
   Serial.println(WiFi.localIP());
-  // --------------------------
+  udp.begin(4212);
 
+  // --- MPU ---
   mpu.initialize();
   if (!mpu.testConnection()) {
     Serial.println("MPU6050 connection failed!");
     while (true);
   }
 
-  devStatus = mpu.dmpInitialize();
 
+  devStatus = mpu.dmpInitialize();
   mpu.setXGyroOffset(0);
   mpu.setYGyroOffset(0);
   mpu.setZGyroOffset(0);
@@ -76,14 +79,22 @@ void setup() {
     mpu.setDMPEnabled(true);
     DMPReady = true;
     packetSize = mpu.dmpGetFIFOPacketSize();
+    Serial.println("MPU ready.");
   } else {
     Serial.print("DMP failed, code: ");
     Serial.println(devStatus);
-  }
+  } 
 }
 
 void loop() {
   if (!DMPReady) return;
+
+  // --- WiFi watchdog ---
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(AP_SSID, AP_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) delay(500);
+  }
+
   if (!mpu.dmpGetCurrentFIFOPacket(FIFOBuffer)) return;
 
   mpu.dmpGetQuaternion(&q, FIFOBuffer);
@@ -115,30 +126,31 @@ void loop() {
       lastPrintTime = millis();
     }
 
-    if (millis() - lastPrintTime >= 10) {
+    if (millis() - lastPrintTime >= 50) {
       float relYaw  = yaw  - yawOffset;
       float relRoll = roll - rollOffset;
 
       if (relYaw >  180) relYaw -= 360;
       if (relYaw < -180) relYaw += 360;
 
-      // Print to Serial for local debugging
-      Serial.print(relYaw, 1);
-      Serial.print("\t");
-      Serial.println(relRoll, 1);
+      // 1. Create the struct and load it with your data
+      SensorData myData;
+      myData.yaw = relYaw;
+      myData.roll = relRoll;
 
-      // --- ADDED: UDP Transmission ---
-      // Format the data. Sending as a comma-separated string: "Yaw,Roll"
-      char udpPayload[32];
-      snprintf(udpPayload, sizeof(udpPayload), "%.1f,%.1f", relYaw, relRoll);
-
+      // 2. Send the raw binary packet (No strings attached!)
       udp.beginPacket(WROOM_IP, UDP_PORT);
-      udp.print(udpPayload);
+      udp.write((uint8_t*)&myData, sizeof(myData));
       udp.endPacket();
-      // -------------------------------
+
+    Serial.print("Sent X: ");
+    Serial.print(myData.yaw);
+    Serial.print("\tZ: ");
+    Serial.println(myData.roll); // mirror to serial for debugging
 
       lastPrintTime = millis();
     }
+
   } else {
     wasPinching = false;
   }
