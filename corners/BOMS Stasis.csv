@@ -1,0 +1,16 @@
+,Purpose,CAD,quantity
+Robot Arm,Movement and grabbing,yes,1
+MG996R,Servo Motors,no,3
+ESP32-WROOM,MCU,no,1
+SG90,Smaller Servo Motors,no,2
+Buck Converter,"Step down voltage, increase amperage",no,4
+,,,
+Telegraph,Morse Code,no,1
+ESP32 mini,MCU + UDP,no,1
+3 Volt Battery,Battery,no,1
+,,,
+Glove,Housing all components,no,1
+ESP32 mini,MCU + UDP,no,1
+MPU6050,Gyroscope + accelerometer,no,1
+3 Volt Battery,Battery,no,1
+Aluminum Pad,Capacitive touch,no,2
